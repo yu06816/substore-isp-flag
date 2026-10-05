@@ -262,7 +262,7 @@ async function operator(proxies = [], targetPlatform, context) {
   const dohUrl = String(args.doh || DOH_DEFAULT_URL)
 
   const cacheEnabled = bool(args.cache, true) && !!cache
-  const cacheTtl = int(args.cache_ttl, 43200, 60, 2592000) * 1000
+  const cacheTtl = int(args.cache_ttl, 600, 60, 2592000) * 1000
 
   const stats = { total: proxies.length, renamed: 0, cached: 0, failed: 0, requests: 0, dns: 0 }
 
