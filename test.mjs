@@ -153,22 +153,22 @@ await testAsync('关键词 / 国家码 / 城市名都能识别', async () => {
     { name: '台湾Y01', server: '203.0.113.7' },
     { name: '美国Y01', server: '198.51.100.9' },
     { name: 'US-CA 01', server: '198.51.100.9' },
-    { name: 'cn Taiwan', server: '203.0.113.7' },
+    { name: 'CN Taiwan', server: '203.0.113.7' },
     { name: 'Tokyo 01', server: '203.0.113.7' },
     { name: 'UK01', server: '203.0.113.7' },
   ]
   const out = await operator(proxies, 'Clash', {})
-  const flags = out.map(p => (p.name.match(/(?:^| )(hk|tw|us|jp|uk)(?: |$)/) || ['', ''])[1])
-  assert.deepStrictEqual(flags, ['hk', 'tw', 'us', 'us', 'tw', 'jp', 'uk'])
+  const flags = out.map(p => (p.name.match(/(?:^| )(HK|TW|US|JP|UK)(?: |$)/) || ['', ''])[1])
+  assert.deepStrictEqual(flags, ['HK', 'TW', 'US', 'US', 'TW', 'JP', 'UK'])
 })
 
 console.log('\n=== 3. emoji 兜底让脚本可重入 ===')
-await testAsync('第二遍喂回 杭州电信 hk 仍能刷新', async () => {
+await testAsync('第二遍喂回 杭州电信 HK 仍能刷新', async () => {
   const state = {}
   const { operator } = makeEnv({ args: { cache: 'false' }, http: ipapiHandler(state) })
-  const proxies = [{ name: '杭州电信 hk', server: '203.0.113.7' }]
+  const proxies = [{ name: '杭州电信 HK', server: '203.0.113.7' }]
   const out = await operator(proxies, 'Clash', {})
-  assert.strictEqual(out[0].name, '杭州电信 hk')
+  assert.strictEqual(out[0].name, '杭州电信 HK')
   assert.ok(state.batchCalls + state.singleCalls > 0, '应当真的发起过查询而不是被跳过')
 })
 await testAsync('emoji_fallback=false 时退回旧行为（跳过）', async () => {
@@ -180,11 +180,25 @@ await testAsync('emoji_fallback=false 时退回旧行为（跳过）', async () 
 })
 
 console.log('\n=== 4. 批量端点 ===')
+await testAsync('旧小写名称转换为大写并保留 H 和小数倍率', async () => {
+  const { operator } = makeEnv({ args: { cache: 'false' }, http: ipapiHandler({}) })
+  for (const [name, server, expected] of [
+    ['hk H 0.05', '198.51.100.9', 'HK H 0.05'],
+    ['杭州电信 uk H 1.50', '203.0.113.7', '杭州电信 UK H 1.50'],
+    ['is H 0.2', '198.51.100.9', 'IS H 0.2'],
+  ]) {
+    const proxies = [{ name, server }]
+    await operator(proxies, 'Clash', {})
+    assert.strictEqual(proxies[0].name, expected)
+    await operator(proxies, 'Clash', {})
+    assert.strictEqual(proxies[0].name, expected)
+  }
+})
 await testAsync('常用和冷门地区统一代码，emoji 可兜底且重复运行稳定', async () => {
   const { operator } = makeEnv({ args: { cache: 'false' }, http: ipapiHandler({}) })
   const cases = [
-    ['香港', 'hk'], ['新加坡', 'sg'], ['日本', 'jp'], ['台湾', 'tw'], ['美国', 'us'], ['英国', 'uk'],
-    ['冰岛', 'is'], ['乌拉圭', 'uy'], ['🇦🇩 节点', 'ad'], ['BZ01', 'bz'], ['🇸🇨 家宽 0.05倍', 'sc H 0.05'],
+    ['香港', 'HK'], ['新加坡', 'SG'], ['日本', 'JP'], ['台湾', 'TW'], ['美国', 'US'], ['英国', 'UK'],
+    ['冰岛', 'IS'], ['乌拉圭', 'UY'], ['🇦🇩 节点', 'AD'], ['BZ01', 'BZ'], ['🇸🇨 家宽 0.05倍', 'SC H 0.05'],
   ]
   for (const [name, expected] of cases) {
     const proxies = [{ name, server: '198.51.100.9' }]
@@ -233,7 +247,7 @@ await testAsync('429 后按 X-Ttl 退避并重试成功', async () => {
   const { operator, log } = makeEnv({ args: { cache: 'false' }, http: ipapiHandler(state) })
   const out = await operator([{ name: '香港 HK1', server: '192.0.2.5' }], 'Clash', {})
   assert.strictEqual(state.batchCalls, 2, `应重试一次，实际 ${state.batchCalls} 次`)
-  assert.ok(out[0].name.includes('hk'))
+  assert.ok(out[0].name.includes('HK'))
   assert.ok(log.info.some(l => l.includes('429')), '应有 429 日志')
 })
 
@@ -248,7 +262,7 @@ await testAsync('第二次运行命中缓存，不再发请求', async () => {
   const env2 = makeEnv({ args: {  }, http: ipapiHandler(state2), cacheStore: store })
   const out = await env2.operator([{ name: '香港 HK1', server: '192.0.2.5' }], 'Clash', {})
   assert.strictEqual(state2.batchCalls, 0, '第二次不应再请求')
-  assert.ok(out[0].name.includes('hk'))
+  assert.ok(out[0].name.includes('HK'))
 })
 await testAsync('cache_ttl 生效（显式写入 TTL）', async () => {
   const store = new Map()
@@ -274,7 +288,7 @@ await testAsync('已有 " 1" 后缀时不产生重复名', async () => {
   const state = {}
   const { operator } = makeEnv({ args: { cache: 'false' }, http: ipapiHandler(state) })
   const proxies = [
-    { name: '杭州电信 hk 1', server: '203.0.113.7' },
+    { name: '杭州电信 HK 1', server: '203.0.113.7' },
     { name: '香港 HK01', server: '203.0.113.7' },
     { name: '香港 HK02', server: '203.0.113.7' },
   ]
@@ -286,10 +300,10 @@ await testAsync('纯本地用例：三个同名 + 一个已占位', async () => 
   const state = {}
   const { sandbox } = makeEnv({ args: {}, http: ipapiHandler(state) })
   const numberDuplicates = vm.runInContext('numberDuplicates', sandbox)
-  const list = [{ name: 'A hk 1' }, { name: 'A hk' }, { name: 'A hk' }]
+  const list = [{ name: 'A HK 1' }, { name: 'A HK' }, { name: 'A HK' }]
   numberDuplicates(list, ' ')
   const names = list.map(p => p.name)
-  assert.deepStrictEqual(names, ['A hk 1', 'A hk 2', 'A hk 3'])
+  assert.deepStrictEqual(names, ['A HK 1', 'A HK 2', 'A HK 3'])
 })
 
 console.log('\n=== 8. 运营商分类 ===')
@@ -305,10 +319,10 @@ await testAsync('分类结果符合预期', async () => {
     'Clash',
     {}
   )
-  assert.strictEqual(out[0].name, 'hk')
-  assert.strictEqual(out[1].name, 'us')
-  assert.strictEqual(out[2].name, '杭州电信 cn')
-  assert.strictEqual(out[3].name, 'au', '非大陆入口不显示地区和运营商')
+  assert.strictEqual(out[0].name, 'HK')
+  assert.strictEqual(out[1].name, 'US')
+  assert.strictEqual(out[2].name, '杭州电信 CN')
+  assert.strictEqual(out[3].name, 'AU', '非大陆入口不显示地区和运营商')
 })
 await testAsync('非大陆托管商也不显示入口，重名旗帜仍编号', async () => {
   const { operator } = makeEnv({ args: { cache: 'false' }, http: ipapiHandler({}) })
@@ -320,8 +334,8 @@ await testAsync('非大陆托管商也不显示入口，重名旗帜仍编号', 
     'Clash',
     {}
   )
-  assert.strictEqual(out[0].name, 'us 1')
-  assert.strictEqual(out[1].name, 'us 2')
+  assert.strictEqual(out[0].name, 'US 1')
+  assert.strictEqual(out[1].name, 'US 2')
 })
 
 console.log('\n=== 9. 保留原名家宽与倍率 ===')
@@ -330,9 +344,9 @@ await testAsync('非大陆入口保留旗帜、编号、H 和小数倍率，重�
   const proxies = [
     { name: '香港 家宽 0.05倍', server: '198.51.100.9' },
     { name: '香港 家宽 0.05倍', server: '192.0.2.5' },
-    { name: '美国 AWS us H 1.50', server: '198.51.100.9' },
+    { name: '美国 AWS US H 1.50', server: '198.51.100.9' },
   ]
-  const expected = ['hk 1 H 0.05', 'hk 2 H 0.05', 'us H 1.50']
+  const expected = ['HK 1 H 0.05', 'HK 2 H 0.05', 'US H 1.50']
   await operator(proxies, 'Clash', {})
   assert.deepStrictEqual(proxies.map(p => p.name), expected)
   await operator(proxies, 'Clash', {})
@@ -350,10 +364,10 @@ await testAsync('台湾澳门入口不显示入口，region=false 不去掉大�
     { name: '日本 家宽 2x', server: '192.0.2.5' },
     { name: '美国 0.5倍', server: '198.51.100.9' },
   ], 'Clash', {})
-  assert.deepStrictEqual(out.map(p => p.name), ['jp H 2', 'us 0.5'])
+  assert.deepStrictEqual(out.map(p => p.name), ['JP H 2', 'US 0.5'])
   const mainland = makeEnv({ args: { cache: 'false', region: 'false' }, http: base })
   const result = await mainland.operator([{ name: '香港', server: '203.0.113.7' }], 'Clash', {})
-  assert.strictEqual(result[0].name, '电信 hk')
+  assert.strictEqual(result[0].name, '电信 HK')
 })
 await testAsync('常见家宽与倍率写法保留在名称末尾', async () => {
   const { operator } = makeEnv({ args: { cache: 'false' }, http: ipapiHandler({}) })
@@ -374,14 +388,14 @@ await testAsync('常见家宽与倍率写法保留在名称末尾', async () => 
   ]
   for (const [name, suffix] of cases) {
     const out = await operator([{ name, server: '203.0.113.7' }], 'Clash', {})
-    assert.strictEqual(out[0].name, `杭州电信 hk${suffix ? ` ${suffix}` : ''}`, name)
+    assert.strictEqual(out[0].name, `杭州电信 HK${suffix ? ` ${suffix}` : ''}`, name)
   }
 })
 await testAsync('只有倍率或只有 H 的简化名称重复运行不丢失', async () => {
   const { operator } = makeEnv({ args: { cache: 'false' }, http: ipapiHandler({}) })
   for (const [input, expected] of [
-    ['香港 0.05倍', '杭州电信 hk 0.05'],
-    ['香港 家宽', '杭州电信 hk H'],
+    ['香港 0.05倍', '杭州电信 HK 0.05'],
+    ['香港 家宽', '杭州电信 HK H'],
   ]) {
     const proxies = [{ name: input, server: '203.0.113.7' }]
     await operator(proxies, 'Clash', {})
@@ -393,7 +407,7 @@ await testAsync('不同倍率分别编号，标记在编号后且重复运行保
   const { operator } = makeEnv({ args: { cache: 'false' }, http: ipapiHandler({}) })
   const proxies = ['香港 HK01 家宽 0.5倍', '香港 HK02 家宽 0.5倍', '香港 HK03 家宽 2x']
     .map(name => ({ name, server: '203.0.113.7' }))
-  const expected = ['杭州电信 hk 1 H 0.5', '杭州电信 hk 2 H 0.5', '杭州电信 hk H 2']
+  const expected = ['杭州电信 HK 1 H 0.5', '杭州电信 HK 2 H 0.5', '杭州电信 HK H 2']
   await operator(proxies, 'Clash', {})
   assert.deepStrictEqual(proxies.map(p => p.name), expected)
   await operator(proxies, 'Clash', {})
@@ -408,18 +422,18 @@ await testAsync('关闭编号时仍保留标记，失败和跳过时不改变原
     { name: '剩余流量 香港 家宽 2x', server: '203.0.113.7' },
   ], 'Clash', {})
   assert.deepStrictEqual(out.map(p => p.name), [
-    '杭州电信 hk H 0.5', '香港 家宽 0.5倍', '未知节点 家宽 2x', '剩余流量 香港 家宽 2x',
+    '杭州电信 HK H 0.5', '香港 家宽 0.5倍', '未知节点 家宽 2x', '剩余流量 香港 家宽 2x',
   ])
 })
 await testAsync('带标记编号避开未改名节点占用的名称', async () => {
   const { operator } = makeEnv({ args: { cache: 'false', number_sep: '-' }, http: ipapiHandler({}) })
   const out = await operator([
-    { name: '杭州电信 hk-1 H 2', server: '10.0.0.1' },
+    { name: '杭州电信 HK-1 H 2', server: '10.0.0.1' },
     { name: '香港 HK01 家宽 2x', server: '203.0.113.7' },
     { name: '香港 HK02 家宽 2x', server: '203.0.113.7' },
   ], 'Clash', {})
   assert.deepStrictEqual(out.map(p => p.name), [
-    '杭州电信 hk-1 H 2', '杭州电信 hk-2 H 2', '杭州电信 hk-3 H 2',
+    '杭州电信 HK-1 H 2', '杭州电信 HK-2 H 2', '杭州电信 HK-3 H 2',
   ])
 })
 
@@ -469,7 +483,7 @@ await testAsync('$arguments 缺失时使用默认值', async () => {
   const env = makeEnv({ args: {}, http: ipapiHandler(state) })
   vm.runInContext('$arguments = undefined', env.sandbox)
   const out = await env.operator([{ name: '香港 HK1', server: '192.0.2.5' }], 'Clash', {})
-  assert.ok(out[0].name.includes('hk'))
+  assert.ok(out[0].name.includes('HK'))
 })
 
 console.log('\n=== 12. 限流器 ===')
@@ -528,7 +542,7 @@ console.log('\n=== 13. 工具函数 ===')
   })
   test('ccFlag', () => {
     assert.strictEqual(ccFlag('HK'), '🇭🇰')
-    assert.strictEqual(ccFlag('us'), '🇺🇸')
+    assert.strictEqual(ccFlag('US'), '🇺🇸')
     assert.strictEqual(ccFlag('XYZ'), '')
   })
   test('compareIPv4 数值排序（取最小 IP 保证结果稳定）', () => {
@@ -561,10 +575,10 @@ await testAsync('GeoDNS 域名：按 DoH 解析出的国内 IP 定归属（而�
     return Promise.resolve({ statusCode: 200, headers: {}, body: JSON.stringify({ status: 'success', query: 'x', countryCode: 'BR', city: 'Sao Paulo', as: 'AS48266 Catixs Ltd', asname: 'Catixs', hosting: false }) })
   }
   const { operator } = makeEnv({ args: { cache: 'false' }, http })
-  const out = await operator([{ name: 'hk HK-01', server: 'geo.example.com' }], 'Clash', {})
+  const out = await operator([{ name: 'HK HK-01', server: 'geo.example.com' }], 'Clash', {})
   assert.ok(calls.doh >= 1, '应发起过 DoH 解析')
   assert.strictEqual(calls.single, 0, '解析成功后不应再按域名走单条端点')
-  assert.strictEqual(out[0].name, '广州腾讯云 hk', `多条 A 记录应取最小 IP(腾讯)，实际: ${out[0].name}`)
+  assert.strictEqual(out[0].name, '广州腾讯云 HK', `多条 A 记录应取最小 IP(腾讯)，实际: ${out[0].name}`)
 })
 await testAsync('dns=false 时保持旧行为：直接把域名交给 ip-api，不做 DoH', async () => {
   const calls = { doh: 0, single: 0 }
@@ -575,9 +589,9 @@ await testAsync('dns=false 时保持旧行为：直接把域名交给 ip-api，�
     return Promise.resolve({ statusCode: 200, headers: {}, body: JSON.stringify({ status: 'success', query: 'geo.example.com', country: '巴西', countryCode: 'BR', city: 'Sao Paulo', as: 'AS48266 Catixs Ltd', asname: 'Catixs', hosting: false }) })
   }
   const { operator } = makeEnv({ args: { cache: 'false', dns: 'false', batch: 'false' }, http })
-  const out = await operator([{ name: 'hk HK-01', server: 'geo.example.com' }], 'Clash', {})
+  const out = await operator([{ name: 'HK HK-01', server: 'geo.example.com' }], 'Clash', {})
   assert.strictEqual(calls.doh, 0, 'dns=false 不应发起 DoH')
-  assert.strictEqual(out[0].name, 'hk', `实际: ${out[0].name}`)
+  assert.strictEqual(out[0].name, 'HK', `实际: ${out[0].name}`)
 })
 
 console.log(`\n${failed === 0 ? '全部通过' : '有失败项'}：${passed} passed, ${failed} failed\n`)

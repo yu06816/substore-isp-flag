@@ -136,7 +136,7 @@ const COUNTRY_CODES = new Set(('AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ 
 function regionCode(flag) {
   if (!flag) return ''
   const cc = Array.from(flag).map(char => String.fromCharCode(char.codePointAt(0) - 0x1F1E6 + 65)).join('')
-  return cc === 'GB' ? 'uk' : cc.toLowerCase()
+  return cc === 'GB' ? 'UK' : cc
 }
 
 const INFO_NODE_RE = /traffic|expire|剩余|剩餘|到期|过期|重置|官网|订阅|invalid|失效|失効/i
@@ -539,10 +539,10 @@ async function operator(proxies = [], targetPlatform, context) {
 
   function regionFlag(name) {
     // Recognize compact names emitted by this script, including uncommon regions.
-    const compact = name.match(/(?:^| )([a-z]{2})(?:[-_ ]\d+)?(?: H)?(?: \d+(?:\.\d+)?)?$/)
+    const compact = name.match(/(?:^| )([a-zA-Z]{2})(?:[-_ ]\d+)?(?: H)?(?: \d+(?:\.\d+)?)?$/)
     if (compact) {
-      const code = compact[1] === 'uk' ? 'GB' : compact[1].toUpperCase()
-      if (COUNTRY_CODES.has(code)) return ccFlag(code)
+      const code = compact[1].toUpperCase() === 'UK' ? 'GB' : compact[1].toUpperCase()
+      if (COUNTRY_CODES.has(code) && !(compact.index > 0 && WORD_LIKE_CODES.has(code) && compact[1] === code)) return ccFlag(code)
     }
     for (const entry of REGION_MAP) if (entry.re.test(name)) return ccFlag(entry.cc)
     for (const rule of CODE_RULES) if (rule.bare && rule.bare.test(name)) return ccFlag(rule.cc)
@@ -604,7 +604,7 @@ function originalMarkers(name, base, separator) {
   // Recognize our own output without treating arbitrary node numbers as rates.
   const escape = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const numeric = '\\d+(?:\\.\\d+)?'
-  const previous = name.match(new RegExp(`^${escape(base)}(?:${escape(separator)}\\d+)? (H(?: ${numeric})?|${numeric})$`))
+  const previous = name.match(new RegExp(`^${escape(base)}(?:${escape(separator)}\\d+)? (H(?: ${numeric})?|${numeric})$`, 'i'))
   if (previous) return previous[1]
   const home = name.match(/家宽|家寬|家庭宽带|家庭寬帶/)
   // Require an explicit multiplier marker so node numbers and bandwidth stay out.
