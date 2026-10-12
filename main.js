@@ -265,6 +265,7 @@ async function operator(proxies = [], targetPlatform, context) {
   const cacheTtl = int(args.cache_ttl, 300, 60, 2592000) * 1000
 
   const stats = { total: proxies.length, renamed: 0, cached: 0, failed: 0, requests: 0, dns: 0 }
+  const nameParts = new Map()
 
   const targets = []
   for (const proxy of proxies) {
@@ -369,15 +370,21 @@ async function operator(proxies = [], targetPlatform, context) {
     }
     const provider = classifyProvider(body)
     const prefix = regionPrefix(body, provider)
-    const name = `${prefix}${provider} ${item.flag}`.replace(/\s+/g, ' ').trim()
-    if (!name) continue
+    const entranceName = `${prefix}${provider} ${item.flag}`.replace(/\s+/g, ' ').trim()
+    const mainland = String(body.countryCode || '').toUpperCase() === 'CN'
+    const base = mainland ? entranceName : item.flag
+    if (!base) continue
+    const suffix = originalMarkers(item.originalName, base, numberSep) ||
+      originalMarkers(item.originalName, entranceName, numberSep)
+    const name = suffix ? `${base} ${suffix}` : base
     item.proxy.name = name
+    nameParts.set(item.proxy, { base, suffix })
     stats.renamed++
     if (body.proxy === true) $.info(`[${item.originalName}] 入口本身被标记为代理/VPN 出口`)
     $.info(`[${item.originalName}] ${name}`)
   }
 
-  if (numberEnabled) numberDuplicates(proxies, numberSep)
+  if (numberEnabled) numberDuplicates(proxies, numberSep, nameParts)
 
   $.info(
     `[汇总] 节点 ${stats.total} / 改名 ${stats.renamed} / 命中缓存 ${stats.cached} / 查询失败 ${stats.failed} / DoH ${stats.dns} / HTTP 请求 ${stats.requests}`
@@ -575,7 +582,20 @@ async function operator(proxies = [], targetPlatform, context) {
   }
 }
 
-function numberDuplicates(proxies, separator) {
+function originalMarkers(name, base, separator) {
+  // Recognize our own output without treating arbitrary node numbers as rates.
+  const escape = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const numeric = '\\d+(?:\\.\\d+)?'
+  const previous = name.match(new RegExp(`^${escape(base)}(?:${escape(separator)}\\d+)? (H(?: ${numeric})?|${numeric})$`))
+  if (previous) return previous[1]
+  const home = name.match(/家宽|家寬|家庭宽带|家庭寬帶/)
+  // Require an explicit multiplier marker so node numbers and bandwidth stay out.
+  const rate = name.match(/(?:倍率\s*[:：=]?\s*\d+(?:\.\d+)?(?:\s*(?:倍|[xX×]))?(?![\d.a-zA-Z])|(?:^|[^\d.a-zA-Z])(?:\d+(?:\.\d+)?\s*(?:倍|[xX×])|[xX×]\s*\d+(?:\.\d+)?)(?![\d.a-zA-Z]))/)
+  const multiplier = rate ? rate[0].match(/\d+(?:\.\d+)?/)[0] : ''
+  return [home ? 'H' : '', multiplier].filter(Boolean).join(' ')
+}
+
+function numberDuplicates(proxies, separator, nameParts = new Map()) {
   const counts = new Map()
   for (const proxy of proxies) {
     if (!proxy || !proxy.name) continue
@@ -589,11 +609,14 @@ function numberDuplicates(proxies, separator) {
     if (!proxy || !proxy.name) continue
     const base = String(proxy.name)
     if ((counts.get(base) || 0) < 2) continue
+    const parts = nameParts.get(proxy)
     let index = cursor.get(base) || 0
     let candidate
     do {
       index += 1
-      candidate = `${base}${separator}${index}`
+      candidate = parts && parts.suffix
+        ? `${parts.base}${separator}${index} ${parts.suffix}`
+        : `${base}${separator}${index}`
     } while (taken.has(candidate))
     cursor.set(base, index)
     taken.add(candidate)
