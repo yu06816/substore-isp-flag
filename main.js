@@ -131,6 +131,13 @@ const CODE_RULES = (() => {
 })()
 
 const FLAG_EMOJI_RE = /(?:\uD83C[\uDDE6-\uDDFF]){2}/
+const COUNTRY_CODES = new Set(('AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW').split(' '))
+
+function regionCode(flag) {
+  if (!flag) return ''
+  const cc = Array.from(flag).map(char => String.fromCharCode(char.codePointAt(0) - 0x1F1E6 + 65)).join('')
+  return cc === 'GB' ? 'uk' : cc.toLowerCase()
+}
 
 const INFO_NODE_RE = /traffic|expire|剩余|剩餘|到期|过期|重置|官网|订阅|invalid|失效|失効/i
 
@@ -272,7 +279,7 @@ async function operator(proxies = [], targetPlatform, context) {
     if (!proxy || !proxy.server || !proxy.name) continue
     const originalName = String(proxy.name)
     if (INFO_NODE_RE.test(originalName)) continue
-    const flag = regionFlag(originalName)
+    const flag = regionCode(regionFlag(originalName))
     if (!flag && keepOriginal) continue
     targets.push({ proxy, originalName, flag })
   }
@@ -531,9 +538,20 @@ async function operator(proxies = [], targetPlatform, context) {
   }
 
   function regionFlag(name) {
+    // Recognize compact names emitted by this script, including uncommon regions.
+    const compact = name.match(/(?:^| )([a-z]{2})(?:[-_ ]\d+)?(?: H)?(?: \d+(?:\.\d+)?)?$/)
+    if (compact) {
+      const code = compact[1] === 'uk' ? 'GB' : compact[1].toUpperCase()
+      if (COUNTRY_CODES.has(code)) return ccFlag(code)
+    }
     for (const entry of REGION_MAP) if (entry.re.test(name)) return ccFlag(entry.cc)
     for (const rule of CODE_RULES) if (rule.bare && rule.bare.test(name)) return ccFlag(rule.cc)
     for (const rule of CODE_RULES) if (rule.numbered.test(name)) return ccFlag(rule.cc)
+    const uncommon = name.match(/\b([A-Z]{2})(?:[-_ ]?\d{1,3})?\b/g) || []
+    for (const token of uncommon) {
+      const code = token.slice(0, 2)
+      if (COUNTRY_CODES.has(code) && !REGION_MAP.some(entry => entry.cc === code) && !WORD_LIKE_CODES.has(code)) return ccFlag(code)
+    }
     if (emojiFallback) {
       const matched = name.match(FLAG_EMOJI_RE)
       if (matched) return matched[0]
