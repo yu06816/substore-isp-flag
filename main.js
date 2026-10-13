@@ -1,3 +1,18 @@
+/**
+ * Sub-Store 操作脚本：入口归属与运营商识别 (substore-isp-flag)
+ *
+ * 规范：
+ * - 中国大陆入口：改为「城市+运营商 + 落地地区代码」，如「杭州电信 HK」
+ * - 非大陆入口（含港澳台及海外）：仅显示「落地地区代码」，如「HK」、「US」
+ * - 家宽标识统一保留为「🏠」，倍率完整保留原样数字（如「0.5」、「1.50」）
+ * - 家宽和倍率始终位于节点名称末尾，如「杭州电信 HK 🏠 0.5」
+ * - 重名节点在标识前自动编号：如「杭州电信 HK 1 🏠 0.5」、「杭州电信 HK 2 🏠 0.5」
+ * - 批量端点 (ip-api /batch) + 国内 DoH 自解析 (AliDNS) + 滑动窗口限流 + 429 退避
+ */
+
+// ==========================================
+// 1. 地区与国家代码映射
+// ==========================================
 const REGION_MAP = [
   { cc: 'HK', re: /香港|\bhong[\s-]*kong\b|\bhkg\b/i, bare: true },
   { cc: 'MO', re: /澳门|澳門|\bmacao\b|\bmacau\b/i, bare: true },
@@ -113,6 +128,7 @@ const REGION_MAP = [
   { cc: 'CY', re: /塞浦路斯|\bcyprus\b/i },
 ]
 
+// 容易撞词的常见英文代码（如 NO=no, IT=it, IS=is, IN=in 等）
 const WORD_LIKE_CODES = new Set(['NO', 'IN', 'IT', 'IS', 'AT', 'BE', 'AM', 'LA', 'SA', 'CH', 'CO', 'PA', 'MY'])
 
 const CODE_RULES = (() => {
@@ -133,26 +149,23 @@ const CODE_RULES = (() => {
 const FLAG_EMOJI_RE = /(?:\uD83C[\uDDE6-\uDDFF]){2}/
 const COUNTRY_CODES = new Set(('AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW').split(' '))
 
-function regionCode(flag) {
-  if (!flag) return ''
-  const cc = Array.from(flag).map(char => String.fromCharCode(char.codePointAt(0) - 0x1F1E6 + 65)).join('')
-  return cc === 'GB' ? 'UK' : cc
-}
-
 const INFO_NODE_RE = /traffic|expire|剩余|剩餘|到期|过期|重置|官网|订阅|invalid|失效|失効/i
-
 const ANYCAST_RE = /\bcloudflare\b|\bakamai\b|\bfastly\b|\bcloudfront\b|\bg-?core\b|\bgcorelabs\b|\bincapsula\b|\bimperva\b|\bbunnycdn\b/i
 
+// ==========================================
+// 2. 云厂商与运营商规则
+// ==========================================
 const CLOUD_RULES = [
   [/\bamazon[\s-]*web[\s-]*services\b|\bamazon[\s-]*technologies\b|\bamazon\b|\baws\b/i, 'AWS'],
   [/\bmicrosoft[\s-]*azure\b|\bazure\b|\bmicrosoft\b/i, 'Azure'],
   [/\bgoogle[\s-]*fiber\b/i, 'Google Fiber'],
   [/\bgoogle[\s-]*cloud\b|\bgoogle\b/i, 'Google Cloud'],
   [/\boracle\b/i, 'Oracle Cloud'],
-  [/阿里云|阿里巴巴|\balibaba\b|\baliyun\b/i, '阿里云'],
-  [/腾讯云|腾讯|\btencent\b/i, '腾讯云'],
-  [/华为云|华为|\bhuawei\b/i, '华为云'],
-  [/百度|\bbaidu\b/i, '百度云'],
+  [/阿里云|阿里巴巴|\balibaba\b|\baliyun\b|\balicloud\b/i, '阿里云'],
+  // 彻底收口腾讯云及其常见历史机房 (如安慧桥/AS45090 等)
+  [/腾讯云|腾讯|\btencent\b|\bqcloud\b|安慧桥|\banhuiqiao\b|\bas45090\b/i, '腾讯云'],
+  [/华为云|华为|\bhuawei\b|\bhuaweicloud\b/i, '华为云'],
+  [/百度|\bbaidu\b|\bbaidubce\b/i, '百度云'],
   [/金山云|\bkingsoft\b|\bksyun\b/i, '金山云'],
   [/京东云|\bjd[\s-]*cloud\b|\bjdcloud\b/i, '京东云'],
   [/火山引擎|字节跳动|\bvolcengine\b|\bvolcano[\s-]*engine\b|\bbytedance\b/i, '火山引擎'],
@@ -238,13 +251,15 @@ const CARRIER_RULES = [
 ]
 
 const CC_SHORT_NAME = { HK: '香港', MO: '澳门', TW: '台湾' }
-
 const IPAPI_FIELDS = 'status,message,query,country,countryCode,city,regionName,isp,org,as,asname,mobile,proxy,hosting'
 const IPAPI_BATCH_URL = 'http://ip-api.com/batch'
-const IPAPI_SINGLE_URL = `http://ip-api.com/json/{{server}}`
+const IPAPI_SINGLE_URL = 'http://ip-api.com/json/{{server}}'
 const DOH_DEFAULT_URL = 'https://dns.alidns.com/resolve'
 const USER_AGENT = 'Sub-Store-Entrance-ISP-Checker/3.0'
 
+// ==========================================
+// 3. 核心主入口 operator
+// ==========================================
 async function operator(proxies = [], targetPlatform, context) {
   const $ = $substore
   const args = typeof $arguments !== 'undefined' && $arguments ? $arguments : {}
@@ -274,26 +289,29 @@ async function operator(proxies = [], targetPlatform, context) {
   const stats = { total: proxies.length, renamed: 0, cached: 0, failed: 0, requests: 0, dns: 0 }
   const nameParts = new Map()
 
+  // 1. 过滤与识别目标节点
   const targets = []
   for (const proxy of proxies) {
     if (!proxy || !proxy.server || !proxy.name) continue
     const originalName = String(proxy.name)
     if (INFO_NODE_RE.test(originalName)) continue
-    const flag = regionCode(regionFlag(originalName))
+    const flag = regionCode(regionFlag(originalName, emojiFallback))
     if (!flag && keepOriginal) continue
     targets.push({ proxy, originalName, flag })
   }
 
+  // 2. 清洗目标地址并检查缓存
   const queryOf = new Map()
   const pending = new Map()
   for (const item of targets) {
-    const target = String(item.proxy.server)
+    const rawTarget = String(item.proxy.server)
+    const target = cleanServer(rawTarget)
     item.target = target
     if (!queryOf.has(target)) queryOf.set(target, null)
   }
 
   for (const target of queryOf.keys()) {
-    const hit = cacheEnabled ? cache.get(bodyCacheKey(target)) : null
+    const hit = cacheEnabled ? cache.get(bodyCacheKey(target, batchEnabled, customApi, lang)) : null
     if (hit && typeof hit === 'object') {
       queryOf.set(target, hit)
       stats.cached++
@@ -302,8 +320,10 @@ async function operator(proxies = [], targetPlatform, context) {
     }
   }
 
+  // 3. DNS 解析与批量/单条网络查询
   const limiter = makeLimiter(rateLimit, ms => $.wait(ms))
   const pendingList = [...pending.keys()]
+
   if (pendingList.length) {
     const resolvedIp = new Map()
     if (dnsEnabled) {
@@ -325,6 +345,7 @@ async function operator(proxies = [], targetPlatform, context) {
     for (const server of pendingList) {
       queryTargetOf.set(server, isIP(server) ? server : resolvedIp.get(server) || server)
     }
+
     const batchServers = []
     const singleServers = []
     for (const server of pendingList) {
@@ -332,6 +353,7 @@ async function operator(proxies = [], targetPlatform, context) {
       else singleServers.push(server)
     }
 
+    // 批量端点
     if (batchServers.length) {
       const ipList = [...new Set(batchServers.map(s => queryTargetOf.get(s)))]
       const chunks = chunk(ipList, batchSize)
@@ -345,12 +367,15 @@ async function operator(proxies = [], targetPlatform, context) {
           $.error(`[查询] 批量请求失败（${group.length} 个 IP）: ${msg(error)}`)
         }
       }
-      for (const server of batchServers) storeBody(server, bodyByIp.get(queryTargetOf.get(server)))
+      for (const server of batchServers) {
+        storeBody(server, bodyByIp.get(queryTargetOf.get(server)))
+      }
     }
 
+    // 单条端点
     if (singleServers.length) {
       if (batchEnabled) {
-        $.info(`[查询] ${singleServers.length} 个域名入口未解析出 IP，改用单条端点（由 ip-api 服务端解析，可能按境外线路）`)
+        $.info(`[查询] ${singleServers.length} 个域名入口未解析出 IP，改用单条端点（由 ip-api 服务端解析）`)
       } else {
         $.info(`[查询] 单条端点 ${singleServers.length} 个目标（限流 ${rateLimit}/分钟）`)
       }
@@ -364,6 +389,7 @@ async function operator(proxies = [], targetPlatform, context) {
     }
   }
 
+  // 4. 重命名处理
   for (const item of targets) {
     const body = queryOf.get(item.target)
     if (!body) {
@@ -375,15 +401,18 @@ async function operator(proxies = [], targetPlatform, context) {
       $.error(`[${item.originalName}] ${item.target} 查询失败: ${body.message || '未知原因'}`)
       continue
     }
+
     const provider = classifyProvider(body)
-    const prefix = regionPrefix(body, provider)
+    const prefix = regionPrefix(body, provider, regionEnabled)
     const entranceName = `${prefix}${provider} ${item.flag}`.replace(/\s+/g, ' ').trim()
     const mainland = String(body.countryCode || '').toUpperCase() === 'CN'
     const base = mainland ? entranceName : item.flag
     if (!base) continue
+
     const suffix = originalMarkers(item.originalName, base, numberSep) ||
       originalMarkers(item.originalName, entranceName, numberSep)
     const name = suffix ? `${base} ${suffix}` : base
+
     item.proxy.name = name
     nameParts.set(item.proxy, { base, suffix })
     stats.renamed++
@@ -391,6 +420,7 @@ async function operator(proxies = [], targetPlatform, context) {
     $.info(`[${item.originalName}] ${name}`)
   }
 
+  // 5. 重名节点编号
   if (numberEnabled) numberDuplicates(proxies, numberSep, nameParts)
 
   $.info(
@@ -399,17 +429,15 @@ async function operator(proxies = [], targetPlatform, context) {
 
   return proxies
 
+  // ------------------------------------------
+  // 辅助上下文函数
+  // ------------------------------------------
   function storeBody(target, body) {
     if (!body || typeof body !== 'object') return
     queryOf.set(target, body)
     if (!cacheEnabled) return
     const ttl = body.status === 'fail' ? Math.min(cacheTtl, 600000) : cacheTtl
-    cache.set(bodyCacheKey(target), body, ttl)
-  }
-
-  function bodyCacheKey(target) {
-    const ident = batchEnabled ? `batch:${IPAPI_BATCH_URL}:${lang}` : `single:${customApi || IPAPI_SINGLE_URL}:${lang}`
-    return `isp-flag:v3:${hash(ident)}:${target}`
+    cache.set(bodyCacheKey(target, batchEnabled, customApi, lang), body, ttl)
   }
 
   async function resolveDoh(domain) {
@@ -430,7 +458,8 @@ async function operator(proxies = [], targetPlatform, context) {
     }
     ips.sort(compareIPv4)
     const ip = ips[0] || ''
-    if (cacheEnabled) cache.set(key, ip, ip ? cacheTtl : 600000)
+    // 成功缓存设定时长，失败仅缓存 10 秒防抖动
+    if (cacheEnabled) cache.set(key, ip, ip ? cacheTtl : 10000)
     return ip || null
   }
 
@@ -507,80 +536,6 @@ async function operator(proxies = [], targetPlatform, context) {
     }
   }
 
-  function regionPrefix(info, provider) {
-    if (!regionEnabled) return ''
-    const asText = [info.isp, info.org, info.as, info.asname].filter(Boolean).join(' ')
-    if (ANYCAST_RE.test(asText)) return ''
-    if (provider === '百度云') return ''
-    const cc = String(info.countryCode || '').toUpperCase()
-    if (cc === 'CN') {
-      return String(info.city || info.regionName || '')
-        .replace(/(特别行政区|自治区|省|市|区|县)$/i, '')
-        .trim()
-    }
-    if (CC_SHORT_NAME[cc]) return `${CC_SHORT_NAME[cc]} `
-    const country = String(info.country || '').trim()
-    return country ? `${country} ` : ''
-  }
-
-  function classifyProvider(info) {
-    const text = [info.isp, info.org, info.as, info.asname].filter(Boolean).join(' ')
-    if (text) {
-      for (const [rule, name] of CLOUD_RULES) if (rule.test(text)) return name
-      for (const [rule, name] of CN_ISP_RULES) if (rule.test(text)) return name
-      for (const [rule, name] of CARRIER_RULES) if (rule.test(text)) return name
-    }
-    if (info.mobile === true) return '移动网络'
-    const named = String(info.org || info.isp || info.asname || '').trim()
-    if (named) return named.slice(0, 24).trim()
-    if (info.hosting === true) return '云厂商'
-    return '未知运营商'
-  }
-
-  function regionFlag(name) {
-    // Recognize compact names emitted by this script, including uncommon regions.
-    // 兼容之前已带有 🏠 或 H 的格式
-    const compact = name.match(/(?:^| )([a-zA-Z]{2})(?:[-_ ]\d+)?(?: [🏠H])?(?: \d+(?:\.\d+)?)?$/)
-    if (compact) {
-      const code = compact[1].toUpperCase() === 'UK' ? 'GB' : compact[1].toUpperCase()
-      if (COUNTRY_CODES.has(code) && !(compact.index > 0 && WORD_LIKE_CODES.has(code) && compact[1] === code)) return ccFlag(code)
-    }
-    for (const entry of REGION_MAP) if (entry.re.test(name)) return ccFlag(entry.cc)
-    for (const rule of CODE_RULES) if (rule.bare && rule.bare.test(name)) return ccFlag(rule.cc)
-    for (const rule of CODE_RULES) if (rule.numbered.test(name)) return ccFlag(rule.cc)
-    const uncommon = name.match(/\b([A-Z]{2})(?:[-_ ]?\d{1,3})?\b/g) || []
-    for (const token of uncommon) {
-      const code = token.slice(0, 2)
-      if (COUNTRY_CODES.has(code) && !REGION_MAP.some(entry => entry.cc === code) && !WORD_LIKE_CODES.has(code)) return ccFlag(code)
-    }
-    if (emojiFallback) {
-      const matched = name.match(FLAG_EMOJI_RE)
-      if (matched) return matched[0]
-    }
-    return ''
-  }
-
-  function parseJson(res) {
-    const raw = res?.body ?? res?.data ?? res
-    if (raw && typeof raw === 'object') return raw
-    try {
-      return JSON.parse(String(raw || ''))
-    } catch (_) {
-      return null
-    }
-  }
-
-  function header(res, key) {
-    const headers = res?.headers
-    if (!headers || typeof headers !== 'object') return undefined
-    for (const name of Object.keys(headers)) {
-      if (name.toLowerCase() !== key) continue
-      const value = headers[name]
-      return Array.isArray(value) ? value[0] : value
-    }
-    return undefined
-  }
-
   function pool(items, limit, worker) {
     let index = 0
     const run = async () => {
@@ -595,27 +550,96 @@ async function operator(proxies = [], targetPlatform, context) {
     }
     return Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, run))
   }
+}
 
-  function msg(error) {
-    return error?.message || String(error)
+// ==========================================
+// 4. 辅助函数：分类、解析与格式化
+// ==========================================
+function bodyCacheKey(target, batchEnabled, customApi, lang) {
+  const ident = batchEnabled ? `batch:${IPAPI_BATCH_URL}:${lang}` : `single:${customApi || IPAPI_SINGLE_URL}:${lang}`
+  return `isp-flag:v3:${hash(ident)}:${target}`
+}
+
+function regionPrefix(info, provider, regionEnabled) {
+  if (!regionEnabled) return ''
+  const asText = [info.isp, info.org, info.as, info.asname].filter(Boolean).join(' ')
+  if (ANYCAST_RE.test(asText)) return ''
+  if (provider === '百度云') return ''
+  const cc = String(info.countryCode || '').toUpperCase()
+  if (cc === 'CN') {
+    let city = String(info.city || info.regionName || '')
+      .replace(/(特别行政区|自治区|省|市|区|县)$/i, '')
+      .trim()
+    // 修复安慧桥等机房区域直接作为城市名的问题
+    if (/安慧桥|\banhuiqiao\b/i.test(city)) city = '北京'
+    return city
   }
+  if (CC_SHORT_NAME[cc]) return `${CC_SHORT_NAME[cc]} `
+  const country = String(info.country || '').trim()
+  return country ? `${country} ` : ''
+}
+
+function classifyProvider(info) {
+  const text = [info.isp, info.org, info.as, info.asname].filter(Boolean).join(' ')
+  if (text) {
+    for (const [rule, name] of CLOUD_RULES) if (rule.test(text)) return name
+    for (const [rule, name] of CN_ISP_RULES) if (rule.test(text)) return name
+    for (const [rule, name] of CARRIER_RULES) if (rule.test(text)) return name
+  }
+  if (info.mobile === true) return '移动网络'
+  const named = String(info.org || info.isp || info.asname || '').trim()
+  if (named) return named.slice(0, 24).trim()
+  if (info.hosting === true) return '云厂商'
+  return '未知运营商'
+}
+
+function regionFlag(name, emojiFallback = true) {
+  // 识别本脚本生成的压缩格式 (兼容大写、小写、历史 H 与 🏠)
+  const compact = name.match(/(?:^| )([a-zA-Z]{2})(?:[-_ ]\d+)?(?: (?:🏠|[Hh]))?(?: \d+(?:\.\d+)?)?$/)
+  if (compact) {
+    const code = compact[1].toUpperCase() === 'UK' ? 'GB' : compact[1].toUpperCase()
+    if (COUNTRY_CODES.has(code) && !(compact.index > 0 && WORD_LIKE_CODES.has(code) && compact[1] === code)) {
+      return ccFlag(code)
+    }
+  }
+  for (const entry of REGION_MAP) if (entry.re.test(name)) return ccFlag(entry.cc)
+  for (const rule of CODE_RULES) if (rule.bare && rule.bare.test(name)) return ccFlag(rule.cc)
+  for (const rule of CODE_RULES) if (rule.numbered.test(name)) return ccFlag(rule.cc)
+
+  const uncommon = name.match(/\b([A-Z]{2})(?:[-_ ]?\d{1,3})?\b/g) || []
+  for (const token of uncommon) {
+    const code = token.slice(0, 2)
+    if (COUNTRY_CODES.has(code) && !REGION_MAP.some(entry => entry.cc === code) && !WORD_LIKE_CODES.has(code)) {
+      return ccFlag(code)
+    }
+  }
+  if (emojiFallback) {
+    const matched = name.match(FLAG_EMOJI_RE)
+    if (matched) return matched[0]
+  }
+  return ''
+}
+
+function regionCode(flag) {
+  if (!flag) return ''
+  const cc = Array.from(flag).map(char => String.fromCharCode(char.codePointAt(0) - 0x1F1E6 + 65)).join('')
+  return cc === 'GB' ? 'UK' : cc
 }
 
 function originalMarkers(name, base, separator) {
-  // Recognize our own output without treating arbitrary node numbers as rates.
   const escape = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const numeric = '\\d+(?:\\.\\d+)?'
-  // 识别原本带有 🏠 或 H 的历史节点名称
-  const previous = name.match(new RegExp(`^${escape(base)}(?:${escape(separator)}\\d+)? ([🏠H](?: ${numeric})?|${numeric})$`, 'i'))
+
+  // 识别历史输出 (支持 🏠、H/h、倍率)
+  const previous = name.match(new RegExp(`^${escape(base)}(?:${escape(separator)}\\d+)? ((?:🏠|[Hh])(?: ${numeric})?|${numeric})$`, 'i'))
   if (previous) {
-    // 如果之前带 H 或 🏠，统一转成 🏠
     return previous[1].replace(/^[hH]/, '🏠')
   }
-  const home = name.match(/家宽|家寬|家庭宽带|家庭寬帶/)
-  // Require an explicit multiplier marker so node numbers and bandwidth stay out.
+
+  const home = /家宽|家寬|家庭宽带|家庭寬帶/.test(name) || name.includes('🏠')
   const rate = name.match(/(?:倍率\s*[:：=]?\s*\d+(?:\.\d+)?(?:\s*(?:倍|[xX×]))?(?![\d.a-zA-Z])|(?:^|[^\d.a-zA-Z])(?:\d+(?:\.\d+)?\s*(?:倍|[xX×])|[xX×]\s*\d+(?:\.\d+)?)(?![\d.a-zA-Z]))/)
   const multiplier = rate ? rate[0].match(/\d+(?:\.\d+)?/)[0] : ''
-  // 核心改动：家宽标识输出为 🏠
+
   return [home ? '🏠' : '', multiplier].filter(Boolean).join(' ')
 }
 
@@ -626,8 +650,13 @@ function numberDuplicates(proxies, separator, nameParts = new Map()) {
     const name = String(proxy.name)
     counts.set(name, (counts.get(name) || 0) + 1)
   }
+
+  // 严密占位：将所有现有节点名称均记为已占用
   const taken = new Set()
-  for (const [name, count] of counts) if (count === 1) taken.add(name)
+  for (const proxy of proxies) {
+    if (proxy && proxy.name) taken.add(String(proxy.name))
+  }
+
   const cursor = new Map()
   for (const proxy of proxies) {
     if (!proxy || !proxy.name) continue
@@ -646,6 +675,19 @@ function numberDuplicates(proxies, separator, nameParts = new Map()) {
     taken.add(candidate)
     proxy.name = candidate
   }
+}
+
+// ==========================================
+// 5. 基础通用工具函数
+// ==========================================
+function cleanServer(target) {
+  let str = String(target || '').trim()
+  str = str.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, '')
+  str = str.split('/')[0].split('?')[0]
+  const ipv6Bracket = str.match(/^\[([0-9a-fA-F:.]+)\](?::\d+)?$/)
+  if (ipv6Bracket) return ipv6Bracket[1]
+  if ((str.match(/:/g) || []).length > 1) return str
+  return str.replace(/:\d+$/, '')
 }
 
 function makeLimiter(perMinute, wait) {
@@ -671,6 +713,27 @@ function makeLimiter(perMinute, wait) {
       penaltyUntil = Math.max(penaltyUntil, Date.now() + Math.max(1, seconds) * 1000)
     },
   }
+}
+
+function parseJson(res) {
+  const raw = res?.body ?? res?.data ?? res
+  if (raw && typeof raw === 'object') return raw
+  try {
+    return JSON.parse(String(raw || ''))
+  } catch (_) {
+    return null
+  }
+}
+
+function header(res, key) {
+  const headers = res?.headers
+  if (!headers || typeof headers !== 'object') return undefined
+  for (const name of Object.keys(headers)) {
+    if (name.toLowerCase() !== key) continue
+    const value = headers[name]
+    return Array.isArray(value) ? value[0] : value
+  }
+  return undefined
 }
 
 function chunk(list, size) {
@@ -730,4 +793,8 @@ function hash(input) {
   const str = String(input)
   for (let i = 0; i < str.length; i++) value = ((value << 5) + value + str.charCodeAt(i)) | 0
   return (value >>> 0).toString(36)
+}
+
+function msg(error) {
+  return error?.message || String(error)
 }
