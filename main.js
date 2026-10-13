@@ -91,7 +91,7 @@ const REGION_MAP = [
   { cc: 'BR', re: /巴西|圣保罗|里约|\bbrazil\b|\bbrasil\b|\bsao[\s-]*paulo\b|\brio\b/i },
   { cc: 'AR', re: /阿根廷|\bargentina\b|\bbuenos[\s-]*aires\b/i },
   { cc: 'CL', re: /智利|圣地亚哥|\bchile\b|\bsantiago\b/i },
-  { cc: 'CO', re: /哥伦比亚|\bcolombia\b|\bbogota\b/i },
+  { cc: 'CO', re: /哥伦比亚|\bbogota\b|\bcolombia\b/i },
   { cc: 'PE', re: /秘鲁|利马|\bperu\b|\blima\b/i },
   { cc: 'EC', re: /厄瓜多尔|\becuador\b|\bquito\b/i },
   { cc: 'CR', re: /哥斯达黎加|\bcosta[\s-]*rica\b/i },
@@ -539,7 +539,8 @@ async function operator(proxies = [], targetPlatform, context) {
 
   function regionFlag(name) {
     // Recognize compact names emitted by this script, including uncommon regions.
-    const compact = name.match(/(?:^| )([a-zA-Z]{2})(?:[-_ ]\d+)?(?: H)?(?: \d+(?:\.\d+)?)?$/)
+    // 兼容之前已带有 🏠 或 H 的格式
+    const compact = name.match(/(?:^| )([a-zA-Z]{2})(?:[-_ ]\d+)?(?: [🏠H])?(?: \d+(?:\.\d+)?)?$/)
     if (compact) {
       const code = compact[1].toUpperCase() === 'UK' ? 'GB' : compact[1].toUpperCase()
       if (COUNTRY_CODES.has(code) && !(compact.index > 0 && WORD_LIKE_CODES.has(code) && compact[1] === code)) return ccFlag(code)
@@ -604,13 +605,18 @@ function originalMarkers(name, base, separator) {
   // Recognize our own output without treating arbitrary node numbers as rates.
   const escape = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const numeric = '\\d+(?:\\.\\d+)?'
-  const previous = name.match(new RegExp(`^${escape(base)}(?:${escape(separator)}\\d+)? (H(?: ${numeric})?|${numeric})$`, 'i'))
-  if (previous) return previous[1]
+  // 识别原本带有 🏠 或 H 的历史节点名称
+  const previous = name.match(new RegExp(`^${escape(base)}(?:${escape(separator)}\\d+)? ([🏠H](?: ${numeric})?|${numeric})$`, 'i'))
+  if (previous) {
+    // 如果之前带 H 或 🏠，统一转成 🏠
+    return previous[1].replace(/^[hH]/, '🏠')
+  }
   const home = name.match(/家宽|家寬|家庭宽带|家庭寬帶/)
   // Require an explicit multiplier marker so node numbers and bandwidth stay out.
   const rate = name.match(/(?:倍率\s*[:：=]?\s*\d+(?:\.\d+)?(?:\s*(?:倍|[xX×]))?(?![\d.a-zA-Z])|(?:^|[^\d.a-zA-Z])(?:\d+(?:\.\d+)?\s*(?:倍|[xX×])|[xX×]\s*\d+(?:\.\d+)?)(?![\d.a-zA-Z]))/)
   const multiplier = rate ? rate[0].match(/\d+(?:\.\d+)?/)[0] : ''
-  return [home ? 'H' : '', multiplier].filter(Boolean).join(' ')
+  // 核心改动：家宽标识输出为 🏠
+  return [home ? '🏠' : '', multiplier].filter(Boolean).join(' ')
 }
 
 function numberDuplicates(proxies, separator, nameParts = new Map()) {
